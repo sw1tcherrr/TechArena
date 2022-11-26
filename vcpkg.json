@@ -1,0 +1,6 @@
+{
+  "name": "geo",
+  "dependencies": [
+    "boost-geometry"
+  ]
+}
