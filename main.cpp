@@ -3,56 +3,56 @@
 #include <boost/geometry/geometries/point.hpp>
 #include <boost/geometry/geometries/box.hpp>
 #include <boost/geometry/geometries/polygon.hpp>
-
 #include <boost/geometry/index/rtree.hpp>
+#include <simdjson.h>
 
 namespace bg = boost::geometry;
 namespace bgi = boost::geometry::index;
+namespace js = simdjson;
+namespace jso = simdjson::ondemand;
+
+using point = bg::model::point<double, 2, bg::cs::cartesian>;
+
+point parse_point(jso::array_iterator&& it) {
+    double x, y;
+    (*it).get(x); ++it;
+    (*it).get(y); ++it;
+    return {x, y};
+}
 
 int main() {
-    typedef bg::model::point<double, 2, bg::cs::cartesian> point;
-    typedef bg::model::box<point> box;
-    typedef bg::model::polygon<point, false, false> polygon; // ccw, open polygon
+    using box = bg::model::box<point>;
+    using polygon =  bg::model::polygon<point, false, false>; // ccw, open polygon
 
-    std::freopen("input.txt", "r", stdin);
-    std::freopen("output.txt", "w", stdout);
+    jso::parser parser;
+    auto json = js::padded_string::load("../test.json");
+    jso::document doc = parser.iterate(json);
 
-    bgi::rtree< point, bgi::rstar<16, 4> > rtree;
-
-    int n_points;
-    std::cin >> n_points;
-
-    // for vizualization
-    // boost::geometry::model::multi_point<boost::geometry::model::point<double, 2, boost::geometry::cs::cartesian>> points;
-
-    for (int i = 0; i < n_points; ++i) {
-        double x, y;
-        std::cin >> x >> y;
-
-        rtree.insert(point(x, y));
-        // points.push_back(point(x, y));
+    bgi::rtree<point, bgi::rstar<16, 4>> rtree;
+    auto j_points = doc["points"].get_array();
+    for (auto&& jp : j_points) {
+        rtree.insert(parse_point(jp.begin()));
     }
 
-    // boost::geometry::model::polygon<point, false, false> poly;
-    bg::model::polygon<point, false, false> poly; // ccw, open polygon
-
-    poly.outer().push_back(point(30000, 40000));
-    poly.outer().push_back(point(-20000, 60000));
-    poly.outer().push_back(point(-50000, 30000));
-    poly.outer().push_back(point(-30000, -20000));
-    poly.outer().push_back(point(-10000, 20000));
-    poly.outer().push_back(point(20000, 10000));
+    polygon poly;
+    auto j_poly = doc["polygon"].get_object();
+    auto j_border = j_poly["border"];
+    for (auto&& jp : j_border) {
+        poly.outer().push_back(parse_point(jp.begin()));
+    }
+    auto j_holes = j_poly["holes"];
+    for (auto&& jh : j_holes) {
+        poly.inners().emplace_back();
+        for (auto&& jp : jh) {
+            poly.inners().back().push_back(parse_point(jp.begin()));
+        }
+    }
 
     std::vector<point> result;
     rtree.query(bgi::intersects<polygon>(poly), std::back_inserter(result));
 
-    // for vizualization
-    // boost::geometry::model::multi_point<boost::geometry::model::point<double, 2, boost::geometry::cs::cartesian>> result_points;
-
     for (point p : result) {
         std::cout << bg::wkt<point>(p) << std::endl;
-
-        // result_points.push_back(p);
     }
 
     return 0;

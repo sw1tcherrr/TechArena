@@ -3,7 +3,8 @@ project(geo)
 
 set(CMAKE_CXX_STANDARD 20)
 find_package(Boost REQUIRED)
+find_package(simdjson REQUIRED)
 
 add_executable(geo main.cpp)
 
-target_link_libraries(geo PRIVATE Boost::boost)
+target_link_libraries(geo PRIVATE Boost::boost simdjson::simdjson)
