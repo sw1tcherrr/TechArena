@@ -27,8 +27,8 @@ struct polygon {
         T x_max = lim::min(); // TODO: is correct for float?
         T y_min = lim::max();
         T y_max = lim::min();
-        for (auto&& p : border) {
-            x_min = std::min(x_min, p.x);
+        for (auto&& p : border) { // gashnya-TODO: check boost
+            x_min = std::min(x_min, p.x); // TODO: is correct for float?
             x_max = std::max(x_max, p.x);
             y_min = std::min(y_min, p.y);
             y_max = std::max(y_max, p.y);

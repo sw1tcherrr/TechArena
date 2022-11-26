@@ -10,9 +10,10 @@ private:
     node sentinel{};
 };
 
+// TODO: insert + range-query
 template <class Point, int M>
 struct rtree<Point, M>::node {
 private:
     box<Point> rect{};
-    std::variant<std::array<node*, M>, std::array<Point, M>> content{};
+    std::variant<std::vector<node*>, std::vector<Point>> content{};
 };
