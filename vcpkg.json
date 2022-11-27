@@ -1,7 +1,6 @@
 {
   "name": "geo",
   "dependencies": [
-    "boost-geometry",
-    "simdjson"
+    "boost-geometry"
   ]
 }
