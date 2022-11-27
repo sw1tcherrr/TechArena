@@ -37,7 +37,8 @@ int main() {
     double bbox_h = bbox.max_corner().get<1>() - bbox.min_corner().get<1>();
     double bbox_w = bbox.max_corner().get<0>() - bbox.min_corner().get<0>();
 
-    double min_sum = DBL_MAX;
+    double min_sum = bbox_val;
+	std::vector<box> min_vec;
 
     for (int ww = 1; ww <= bbox_w; ++ww) {
         for (int hh = 1; hh <= bbox_h; ++hh) {
@@ -77,11 +78,20 @@ int main() {
             std::vector<boost::geometry::model::box<boost::geometry::model::point<double, 2, boost::geometry::cs::cartesian>>> result_ii;
             size_t intersects_b_cnt = rtree.query(bgi::intersects<linestring>(border), std::back_inserter(result_ii));
 
-            min_sum = std::min(min_sum, (intersects_cnt - intersects_b_cnt) * (1 + area_piece * c1) + intersects_b_cnt * (1 + area_piece * c2));
+			double cur = (intersects_cnt - intersects_b_cnt) * (1 + area_piece * c1) + intersects_b_cnt * (1 + area_piece * c2);
+            if (cur < min_sum) {
+				min_sum = cur;
+				min_vec = std::move(result_i);
+			}
         }
     }
 
     std::cout << min_sum << " " << bbox_val << std::endl;
+
+	std::cout << min_vec.size() << "\n";
+	for (auto&& b : min_vec) {
+		std::cout << std::setprecision(9) << b.min_corner().get<0>() << " " << b.min_corner().get<1>() << " " << b.max_corner().get<0>() << " " << b.max_corner().get<1>() << "\n";
+	}
 
     return 0;
 }
