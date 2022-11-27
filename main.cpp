@@ -10,7 +10,7 @@ int main() {
     using polygon =  bg::model::polygon<point>;
     using linestring = bg::model::linestring<point>;
 
-	std::string test_num = "01";
+	std::string test_num = "03";
 	std::string test_name = std::string("../tests/") + test_num + ".txt";
 	std::string res_name = std::string("../") + test_num + ".txt";
 	std::freopen(test_name.data(), "r", stdin);
@@ -90,7 +90,7 @@ int main() {
 
 	std::cout << min_vec.size() << "\n";
 	for (auto&& b : min_vec) {
-		std::cout << std::setprecision(9) << b.min_corner().get<0>() << " " << b.min_corner().get<1>() << " " << b.max_corner().get<0>() << " " << b.max_corner().get<1>() << "\n";
+		std::cout << std::fixed << std::setprecision(9) << b.min_corner().get<0>() << " " << b.min_corner().get<1>() << " " << b.max_corner().get<0>() << " " << b.max_corner().get<1>() << "\n";
 	}
 
     return 0;
