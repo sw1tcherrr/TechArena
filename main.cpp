@@ -1,10 +1,5 @@
 #include <iostream>
 #include <boost/geometry/geometry.hpp>
-#include <boost/geometry/geometries/point.hpp>
-#include <boost/geometry/geometries/box.hpp>
-#include <boost/geometry/geometries/polygon.hpp>
-#include <boost/geometry/index/rtree.hpp>
-#include <simdjson.h>
 
 namespace bg = boost::geometry;
 namespace bgi = boost::geometry::index;
@@ -32,9 +27,47 @@ int main() {
 		poly.outer().push_back(point(x, y));
 	}
 
-    for (point p : result) {
-        std::cout << bg::wkt<point>(p) << std::endl;
+    box bbox = bg::return_envelope<box>(poly);
+    double bbox_val = 1 + bg::area(bbox) * c1;
+
+    bgi::rtree<box, bgi::rstar<16, 4>> rtree;
+
+    double bbox_h = bbox.max_corner().get<1>() - bbox.max_corner().get<1>();
+    double bbox_w = bbox.max_corner().get<0>() - bbox.max_corner().get<0>();
+
+    int w_piece_cnt = 10;
+    int h_piece_cnt = 20;
+
+    double w_piece = bbox_w / w_piece_cnt;
+    double h_piece = bbox_h / h_piece_cnt;
+    double area_piece = w_piece * h_piece;
+
+    point min_corner = bbox.min_corner();
+    point max_corner = min_corner;
+    bg::add_point(max_corner, point(w_piece, h_piece));
+
+    for (int i = 0; i < h_piece_cnt; ++i) {
+        for (int j = 0; j < w_piece_cnt; ++j) {
+            box b(min_corner, max_corner);
+            rtree.insert(b);
+
+            bg::add_point(min_corner, point(w_piece, 0));
+            bg::add_point(max_corner, point(w_piece, 0));
+        }
+
+        bg::add_point(min_corner, point(0, h_piece));
+        bg::add_point(max_corner, point(0, h_piece));
     }
+
+    std::vector<point> result_i;
+    size_t intersects_cnt = rtree.query(bgi::intersects<polygon>(poly), std::back_inserter(result_i));
+
+    std::vector<point> result_w;
+    size_t within_cnt = rtree.query(bgi::within<polygon>(poly), std::back_inserter(result_w));
+
+    double sum = within_cnt * (1 + area_piece * c1) + (intersects_cnt - within_cnt) * (1 + area_piece * c2);
+
+    std::cout << sum << " " << bbox_val << std::endl;
 
     return 0;
 }
