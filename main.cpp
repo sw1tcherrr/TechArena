@@ -10,7 +10,7 @@ using polygon =  bg::model::polygon<point, true, false>;
 using linestring = bg::model::linestring<point>;
 using segment = bg::model::segment<point>;
 
-void print_box(box const &b) {
+void print_box(box const& b) {
 	std::cout << std::fixed << std::setprecision(9)
 			  << b.min_corner().x() << " " << b.min_corner().y() << " "
 			  << b.max_corner().x() << " " << b.max_corner().y() << "\n";
@@ -56,9 +56,30 @@ std::vector<box> equal_boxes(box const& bbox, int w_cnt, int h_cnt) {
 	return boxes;
 }
 
-//std::vector<box> vertex_boxes() {
-//
-//}
+std::vector<box> vertex_boxes(polygon const& poly) {
+	std::vector<box> boxes;
+	std::set<double> xs;
+	std::set<double> ys;
+	for (auto&& p : poly.outer()) {
+		xs.insert(p.x());
+		ys.insert(p.y());
+	}
+
+	for (auto y_it = ys.begin(); y_it != ys.end(); ++y_it) {
+		for (auto x_it = xs.begin(); x_it != xs.end(); ++x_it) {
+			auto next_x_it = std::next(x_it);
+			auto next_y_it = std::next(y_it);
+
+			if (next_x_it == xs.end() || next_y_it == ys.end()) {
+				continue;
+			}
+
+			boxes.emplace_back(point(*x_it, *y_it), point(*next_x_it, *next_y_it));
+		}
+	}
+
+	return boxes;
+}
 
 struct inside_predicate {
 	polygon const& poly;
@@ -80,6 +101,35 @@ std::pair<std::vector<box>, std::vector<box>> filter_boxes(polygon const& poly, 
 	rtree.query(bgi::intersects(border), std::back_inserter(crossing));
 
 	return {std::move(inside), std::move(crossing)};
+}
+
+void crop_boxes(polygon const& poly, std::vector<box>& inside, std::vector<box>& crossing) {
+	for (int i = 0; i < crossing.size(); /*noop*/) {
+		box& b = crossing[i];
+
+		std::vector<polygon> p;
+		bg::intersection(poly, b, p);
+
+		if (p.empty()) {
+			std::swap(b, crossing.back());
+			crossing.pop_back();
+			continue;
+		}
+
+		box bbox_p = bg::return_envelope<box>(p[0]);
+		double p_area = bg::area(p[0]);
+		double bbp_area = bg::area(bbox_p);
+
+		if (std::abs(p_area - bbp_area) < 0.000000001) {
+			inside.push_back(b);
+			std::swap(b, crossing.back());
+			crossing.pop_back();
+			continue;
+		}
+
+		crossing[i] = bbox_p;
+		++i;
+	}
 }
 
 std::vector<polygon> split_poly(polygon poly) {
@@ -174,6 +224,17 @@ brute_force_eq_result brute_force_eq(polygon const& poly, double c1, double c2, 
 	return res;
 }
 
+result vertex_and_crop(polygon const& poly, double c1, double c2) {
+	linestring border(poly.outer().begin(), poly.outer().end());
+	border.push_back(border[0]);
+	bg::correct(border);
+
+	auto [inside, crossing] = filter_boxes(poly, border, vertex_boxes(poly));
+	crop_boxes(poly, inside, crossing);
+
+	return {std::move(inside), std::move(crossing), score(inside, crossing, c1, c2)};
+}
+
 int main() {
 	#define TEST_NUM "02"
 	char const* test_name = "../tests/" TEST_NUM ".txt";
@@ -195,7 +256,8 @@ int main() {
 	}
 	bg::correct(poly);
 
-	auto res = brute_force_eq(poly, c1, c2);
+//	auto res = brute_force_eq(poly, c1, c2);
+	auto res = vertex_and_crop(poly, c1, c2);
 
 	std::cout << res.inside.size() + res.crossing.size() << "\n";
 	for (auto&& b : res.inside) {
