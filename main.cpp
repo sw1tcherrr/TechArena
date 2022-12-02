@@ -1,5 +1,6 @@
 #include <iostream>
 #include <boost/geometry/geometry.hpp>
+#include <fstream>
 
 namespace bg = boost::geometry;
 namespace bgi = boost::geometry::index;
@@ -9,6 +10,13 @@ using box = bg::model::box<point>;
 using polygon =  bg::model::polygon<point, true, false>;
 using linestring = bg::model::linestring<point>;
 using segment = bg::model::segment<point>;
+using svg_mapper = bg::svg_mapper<point>;
+
+template <class T>
+void fast_pop(std::vector<T>& vec, int idx) {
+    std::swap(vec[idx], vec.back());
+    vec.pop_back();
+}
 
 void print_box(box const& b) {
 	std::cout << std::fixed << std::setprecision(9)
@@ -85,14 +93,13 @@ struct inside_predicate {
 	polygon const& poly;
 	linestring const& border;
 
-	template <class Value>
-	bool operator()(Value const& v) const {
-		return bg::intersects(v, poly) && !bg::intersects(v, border);
+	bool operator()(box const& b) const {
+		return bg::intersects(b, poly) && !bg::intersects(b, border);
 	}
 };
 
 std::pair<std::vector<box>, std::vector<box>> filter_boxes(polygon const& poly, linestring const& border, std::vector<box>&& boxes) {
-	bgi::rtree<box, bgi::rstar<16, 4>> rtree(boxes);
+	bgi::rtree<box, bgi::rstar<16, 4>> rtree(boxes); // TODO: rstar?
 
 	std::vector<box> inside;
 	rtree.query(bgi::satisfies(inside_predicate{poly, border}), std::back_inserter(inside));
@@ -103,33 +110,71 @@ std::pair<std::vector<box>, std::vector<box>> filter_boxes(polygon const& poly, 
 	return {std::move(inside), std::move(crossing)};
 }
 
+bool double_eq(double a, double b) {
+    return std::abs(a - b) < 0.000000001;
+}
+
 void crop_boxes(polygon const& poly, std::vector<box>& inside, std::vector<box>& crossing) {
+    std::vector<box> tmp;
 	for (int i = 0; i < crossing.size(); /*noop*/) {
-		box& b = crossing[i];
-
-		std::vector<polygon> p;
-		bg::intersection(poly, b, p);
-
-		if (p.empty()) {
-			std::swap(b, crossing.back());
-			crossing.pop_back();
-			continue;
-		}
-
-		box bbox_p = bg::return_envelope<box>(p[0]);
-		double p_area = bg::area(p[0]);
-		double bbp_area = bg::area(bbox_p);
-
-		if (std::abs(p_area - bbp_area) < 0.000000001) {
-			inside.push_back(b);
-			std::swap(b, crossing.back());
-			crossing.pop_back();
-			continue;
-		}
-
-		crossing[i] = bbox_p;
+        std::vector<polygon> inter;
+		bg::intersection(poly, crossing[i], inter);
+        fast_pop(crossing, i);
+        for (auto&& p : inter) {
+            tmp.push_back(bg::return_envelope<box>(p));
+        }
 		++i;
 	}
+    for (auto&& b : tmp) {
+        crossing.push_back(b);
+    }
+}
+
+struct common_right_predicate {
+    box const& lhs;
+    bool operator()(box const& rhs) const {
+        return double_eq(lhs.max_corner().x(), rhs.min_corner().x())
+               && double_eq(lhs.min_corner().y(), rhs.min_corner().y())
+               && double_eq(lhs.max_corner().y(), rhs.max_corner().y());
+    }
+};
+
+struct common_bot_predicate {
+    box const& lhs;
+    bool operator()(box const& rhs) const {
+        return double_eq(lhs.min_corner().y(), rhs.max_corner().y())
+               && double_eq(lhs.min_corner().x(), rhs.min_corner().x())
+               && double_eq(lhs.max_corner().x(), rhs.max_corner().x());
+    }
+};
+
+void unite_boxes(std::vector<box>& boxes) {
+    bgi::rtree<box, bgi::rstar<16, 4>> rtree(boxes); // TODO: remove crossing from rtree in filter_boxes and pass here
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto it = rtree.begin(); it != rtree.end(); /*noop*/) {
+            std::vector<box> nbr;
+            box united;
+            if (rtree.query(bgi::satisfies(common_right_predicate{*it}), std::back_inserter(nbr))) {
+                united = {it->min_corner(), nbr[0].max_corner()};
+            } else if (rtree.query(bgi::satisfies(common_bot_predicate{*it}), std::back_inserter(nbr))) {
+                united = {nbr[0].min_corner(), it->max_corner()};
+            } else {
+                ++it;
+                continue;
+            }
+            changed = true;
+            rtree.remove(*it);
+            rtree.remove(nbr[0]);
+            rtree.insert(united);
+            it = rtree.begin();
+        }
+    }
+
+    boxes.reserve(rtree.size());
+    boxes.assign(rtree.begin(), rtree.end());
 }
 
 std::vector<polygon> split_poly(polygon poly) {
@@ -185,9 +230,9 @@ std::vector<polygon> split_poly(polygon poly) {
 }
 
 struct result {
+    double score{0};
 	std::vector<box> inside;
 	std::vector<box> crossing;
-	double score{0};
 };
 
 struct brute_force_eq_result : result {
@@ -232,17 +277,54 @@ result vertex_and_crop(polygon const& poly, double c1, double c2) {
 	auto [inside, crossing] = filter_boxes(poly, border, vertex_boxes(poly));
 	crop_boxes(poly, inside, crossing);
 
-	return {std::move(inside), std::move(crossing), score(inside, crossing, c1, c2)};
+	return {score(inside, crossing, c1, c2), std::move(inside), std::move(crossing)};
+}
+
+result vertex_crop_unite(polygon const& poly, double c1, double c2) {
+    linestring border(poly.outer().begin(), poly.outer().end());
+    border.push_back(border[0]);
+    bg::correct(border);
+
+    auto [inside, crossing] = filter_boxes(poly, border, vertex_boxes(poly));
+    crop_boxes(poly, inside, crossing);
+    unite_boxes(inside);
+
+    return {score(inside, crossing, c1, c2), std::move(inside), std::move(crossing)};
+}
+
+result best_eq_crop_unite(polygon const& poly, double c1, double c2, int w_cnt, int h_cnt) {
+    linestring border(poly.outer().begin(), poly.outer().end());
+    border.push_back(border[0]);
+    bg::correct(border);
+
+    auto [inside, crossing] = filter_boxes(poly, border, equal_boxes(bg::return_envelope<box>(poly), w_cnt, h_cnt));
+//    crop_boxes(poly, inside, crossing);
+    unite_boxes(crossing);
+    crop_boxes(poly, inside, crossing);
+    unite_boxes(inside);
+
+    return {score(inside, crossing, c1, c2), std::move(inside), std::move(crossing)};
+}
+
+template <class Geometry>
+void draw(svg_mapper& mapper, Geometry const& b, std::string&& color) {
+    mapper.add(b);
+    mapper.map(b, "fill-opacity:0.3;fill:" + color + ";stroke:" + color + ";stroke-width:0.5;shape-rendering='crispEdges';");
 }
 
 int main() {
-	#define TEST_NUM "02"
-	char const* test_name = "../tests/" TEST_NUM ".txt";
-	char const* res_name = "../" TEST_NUM ".txt";
-	#undef TEST_NUM
+    std::string test_num;
+    std::cin >> test_num;
+    std::string test_name("../tests/" + test_num + ".txt");
+    std::string res_name("../res/" + test_num + ".txt");
+    std::string img_name("../img/" + test_num + ".svg");
 
-	if (!std::freopen(test_name, "r", stdin)) {return -1;}
-    if (!std::freopen(res_name, "w", stdout)) {return -1;}
+	if (!std::freopen(test_name.data(), "r", stdin)) {return -1;}
+    if (!std::freopen(res_name.data(), "w", stdout)) {return -1;}
+
+    std::ofstream svg(img_name);
+    if (!svg.is_open()) {return -1;}
+    svg_mapper mapper(svg, 800, 800, 0.95);
 
 	int n;
 	double c1, c2;
@@ -257,13 +339,29 @@ int main() {
 	bg::correct(poly);
 
 //	auto res = brute_force_eq(poly, c1, c2);
-	auto res = vertex_and_crop(poly, c1, c2);
+//    std::cerr << res.w_cnt << " " << res.h_cnt << "\n";
+
+//	auto res = vertex_and_crop(poly, c1, c2);
+//    auto res = vertex_crop_unite(poly, c1, c2);
+    result res;
+    if (test_num == "01")
+        res = best_eq_crop_unite(poly, c1, c2, 3, 2);
+    else if (test_num == "02")
+        res = best_eq_crop_unite(poly, c1, c2, 7, 9);
+    else if (test_num == "03")
+        res = best_eq_crop_unite(poly, c1, c2, 11, 7);
+
+
+    draw(mapper, poly, "rgb(255,165,16)");
 
 	std::cout << res.inside.size() + res.crossing.size() << "\n";
 	for (auto&& b : res.inside) {
 		print_box(b);
+        draw(mapper, b, "rgb(51,51,153)");
 	}
 	for (auto&& b : res.crossing) {
 		print_box(b);
+        draw(mapper, b, "rgb(153,204,0)");
 	}
+    std::cerr << res.score << "\n";
 }
